@@ -2,6 +2,7 @@
  ****************************************************/
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1351.h>
+#include <Adafruit_BME280.h>
 #include <SPI.h>
 
 // Screen dimensions
@@ -21,7 +22,7 @@
 #define GROVE_DUST 2
 
 // grove air quality
-#define GROVE_AQ A5
+#define GROVE_AQ A2
 
 // MQ-135
 #define MQ_135 A0
@@ -37,6 +38,14 @@
 #define YELLOW          0xFFE0  
 #define WHITE           0xFFFF
 
+// for bme280
+#define SEALEVELPRESSURE_HPA (1013.25)
+
+const float AQ_BASE = 57.0;
+const float TTL_BASE = 125.0;
+const float MQ_BASE = 330.0;
+const float HUMIDITY_BASE = 50.0;
+
 // Option 1: use any pins but a little slower
 // Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, CS_PIN, DC_PIN, MOSI_PIN, SCLK_PIN, RST_PIN);  
 
@@ -45,6 +54,7 @@
 // an output. This is much faster - also required if you want
 // to use the microSD card (see the image drawing example)
 Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, &SPI, CS_PIN, DC_PIN, RST_PIN);
+Adafruit_BME280 bme; // I2C
 
 void setup(void) {
   Serial.begin(9600); Serial.print("hello!");
@@ -56,89 +66,28 @@ void setup(void) {
 
   tft.begin();
 
-  delay(500);
+  while (!bme.begin(0x76)) {
+    Serial.println("Could not find a valid BME280 sensor, check wiring!");
+    delay(1000);
+  }
+
   tft.fillScreen(BLACK);
-  testdrawtext("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur adipiscing ante sed nibh tincidunt feugiat. Maecenas enim massa, fringilla sed malesuada et, malesuada sit amet turpis. Sed porttitor neque ut ante pretium vitae malesuada nunc bibendum. Nullam aliquet ultrices massa eu hendrerit. Ut sed nisi lorem. In vestibulum purus a tortor imperdiet posuere. ", WHITE);
+  //testdrawtext("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur adipiscing ante sed nibh tincidunt feugiat. Maecenas enim massa, fringilla sed malesuada et, malesuada sit amet turpis. Sed porttitor neque ut ante pretium vitae malesuada nunc bibendum. Nullam aliquet ultrices massa eu hendrerit. Ut sed nisi lorem. In vestibulum purus a tortor imperdiet posuere. ", WHITE);
 
   Serial.println("init");
-
-  // You can optionally rotate the display by running the line below.
-  // Note that a value of 0 means no rotation, 1 means 90 clockwise,
-  // 2 means 180 degrees clockwise, and 3 means 270 degrees clockwise.
-  //tft.setRotation(1);
-  // NOTE: The test pattern at the start will NOT be rotated!  The code
-  // for rendering the test pattern talks directly to the display and
-  // ignores any rotation.
-
-  // uint16_t time = millis();
-  // tft.fillRect(0, 0, 128, 128, BLACK);
-  // time = millis() - time;
-  // 
-  // Serial.println(time, DEC);
-  // delay(500);
-  // 
-  // lcdTestPattern();
-  // delay(500);
-  // 
-  // tft.invert(true);
-  // delay(100);
-  // tft.invert(false);
-  // delay(100);
-  //
-
- //  // tft print function!
- //  tftPrintTest();
- //  delay(500);
- //  
- //  //a single pixel
- //  tft.drawPixel(tft.width()/2, tft.height()/2, GREEN);
- //  delay(500);
- //
- //  // line draw test
- //  testlines(YELLOW);
- //  delay(500);    
- // 
- //  // optimized lines
- //  testfastlines(RED, BLUE);
- //  delay(500);    
- //
- //
- //  testdrawrects(GREEN);
- //  delay(1000);
- //
- //  testfillrects(YELLOW, MAGENTA);
- //  delay(1000);
- //
- //  tft.fillScreen(BLACK);
- //  testfillcircles(10, BLUE);
- //  testdrawcircles(10, WHITE);
- //  delay(1000);
- //   
- //  testroundrects();
- //  delay(500);
- //  
- //  testtriangles();
- //  delay(500);
- //  
- //  Serial.println("done");
- //  delay(1000);
 }
 
 unsigned long duration;
-unsigned long sampletime_ms = 5000; // sample time
+const unsigned long sampletime_ms = 15000; // sample time
 unsigned long lpo = 0;
 unsigned long starttime = millis();
 
 float ratio;
 float concentration;
 
-float p = 1.2344;
-void loop() {
-    // Serial.print("Sensor value: ");
-    // Serial.println(analogRead(A5));
+void collectDustData() {
     duration = pulseIn(GROVE_DUST, LOW);
-    lpo = lpo+duration;
-
+    lpo += duration;
     if ( (millis() - starttime) > sampletime_ms)
     {
         ratio = lpo/(sampletime_ms*10.0);  // Integer percentage 0=>100
@@ -151,15 +100,79 @@ void loop() {
         lpo = 0;
         starttime = millis();
     }
+}
+
+const uint8_t getRatioVal(float ratio) {
+    if (ratio < 1.2) {
+      return 0;
+    } else if (ratio < 1.4) {
+      return 1;
+    } else if (ratio <1.9) {
+      return 2;
+    } else {
+      return 3;
+    };
+}
+
+const void displayRatio(String text, float ratio) {
+    tft.setTextColor(WHITE);
+    tft.print(text);
+
+    uint16_t col;
+    switch (getRatioVal(ratio)) {
+      case 0:
+        col = GREEN;
+        break;
+      case 1:
+        col = YELLOW;
+        break;
+      case 2:
+        col = RED;
+        break;
+      case 3:
+        col = MAGENTA;
+        break;
+    }
+
+    tft.setTextColor(col);
+    tft.println(ratio);
+  }
+
+void loop() {
+    collectDustData();
+
+    const float AQ_RATIO = analogRead(GROVE_AQ) / AQ_BASE;
+    const float TTL_RATIO = analogRead(TTL) / TTL_BASE;
+    const float MQ_RATIO = analogRead(MQ_135) / MQ_BASE;
+    const float HUM_RATIO = bme.readHumidity() / HUMIDITY_BASE;
+
+    const float AVG_RATIO = (AQ_RATIO + TTL_RATIO + MQ_RATIO + HUM_RATIO)/4;
 
     tft.setCursor(0,0);
     tft.fillScreen(BLACK);
-    tft.print("grove aq:");
-    tft.println(analogRead(GROVE_AQ));
-    tft.print("ttl:");
-    tft.println(analogRead(TTL));
-    tft.print("mq135:");
-    tft.println(analogRead(MQ_135));
-    tft.print("dust:");
+
+    displayRatio("Grove AQ: ", AQ_RATIO);
+    displayRatio("TTL: ", TTL_RATIO);
+    displayRatio("MQ135: ", MQ_RATIO);
+    displayRatio("Humidity: ", HUM_RATIO);
+
+    tft.setTextColor(WHITE);
+    tft.print("grove dust: ");
     tft.println(concentration);
+
+    tft.print("Temperature = ");
+    tft.print(bme.readTemperature());
+    tft.println(" °C");
+
+    //tft.print("Pressure = ");
+    //tft.print(bme.readPressure() / 100.0F);
+    //tft.println(" hPa");
+//
+    //tft.print("Approx. Altitude = ");
+    //tft.print(bme.readAltitude(SEALEVELPRESSURE_HPA));
+    //tft.println(" m");
+
+    tft.println("------");
+
+    displayRatio("Overall: ", AVG_RATIO);
 }
